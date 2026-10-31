@@ -476,7 +476,7 @@ cmp.addEventListener("pointerdown",function(e){e.preventDefault();showOrig=true;
 ["pointerup","pointercancel","pointerleave"].forEach(function(n){cmp.addEventListener(n,function(){if(showOrig){showOrig=false;draw()}})});
 cmp.addEventListener("contextmenu",function(e){e.preventDefault()});
 /* Export en pleine résolution, sans redimensionnement */
-var srcFile=null,fmt="jpg",busy=false;
+var srcFile=null,outFmt="jpg",busy=false;
 function mkGL(c){
  var g=c.getContext("webgl",{preserveDrawingBuffer:true});if(!g)return null;
  var pr=g.createProgram();
@@ -580,15 +580,15 @@ function fallbackExport(){
 function runExport(){
  if(!has||busy)return;
  if(crop){toast("Termine le recadrage avant d’exporter.");return}
- busy=true;$("fj").setAttribute("aria-pressed",fmt==="jpg");$("fp").setAttribute("aria-pressed",fmt==="png");
+ busy=true;$("fj").setAttribute("aria-pressed",outFmt==="jpg");$("fp").setAttribute("aria-pressed",outFmt==="png");
  $("ov").style.display="flex";$("oimg").removeAttribute("src");setBusy(true,"Traitement en pleine résolution…");
- exportFull(fmt).then(function(r){
+ exportFull(outFmt).then(function(r){
   busy=false;showResult(r.blob,r.w+" × "+r.h+" px"+(r.note?" · "+r.note:""));
  }).catch(function(){
   toast("Mémoire insuffisante : export en taille réduite.");fallbackExport();
  });
 }
-function setFmt(f){fmt=f;runExport()}
+function setFmt(f){outFmt=f;runExport()}
 $("fj").onclick=function(){setFmt("jpg")};
 $("fp").onclick=function(){setFmt("png")};
 $("exp").onclick=runExport;
@@ -603,7 +603,7 @@ function nativeSave(){
  var fr=new FileReader();
  fr.onload=function(){
   var b64=String(fr.result).split(",")[1];
-  N.FS.writeFile({path:"rush711-picture-color-"+Date.now()+(fmt==="png"?".png":".jpg"),data:b64,directory:"CACHE"})
+  N.FS.writeFile({path:"rush711-picture-color-"+Date.now()+(outFmt==="png"?".png":".jpg"),data:b64,directory:"CACHE"})
    .then(function(r){return N.SH.share({title:"Rush711 Picture Color",files:[r.uri]})})
    .catch(function(e){toast("Partage impossible : "+((e&&e.message)||"erreur"))});
  };
@@ -611,13 +611,13 @@ function nativeSave(){
 }
 $("dl").onclick=function(){
  if(!lastBlob||!blobUrl)return;if(nativeSave())return;
- var a=document.createElement("a");a.href=blobUrl;a.download="rush711-picture-color"+(fmt==="png"?".png":".jpg");
+ var a=document.createElement("a");a.href=blobUrl;a.download="rush711-picture-color"+(outFmt==="png"?".png":".jpg");
  document.body.appendChild(a);a.click();a.remove();toast("Téléchargement lancé.");
 };
 $("share").onclick=function(){
  if(nativeSave())return;
  try{
-  var f=new File([lastBlob],"rush711-picture-color"+(fmt==="png"?".png":".jpg"),{type:fmt==="png"?"image/png":"image/jpeg"});
+  var f=new File([lastBlob],"rush711-picture-color"+(outFmt==="png"?".png":".jpg"),{type:outFmt==="png"?"image/png":"image/jpeg"});
   if(navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f]}).catch(function(){});return}
  }catch(e){}
  toast("Partage indisponible ici. Appuie longuement sur l’image.");
