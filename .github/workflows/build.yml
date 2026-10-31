@@ -14,15 +14,41 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 17
       - name: Creer le projet Android
         run: |
           mkdir www
           cp index.html www/index.html
           npm init -y
-          npm i @capacitor/core @capacitor/cli @capacitor/android
+          npm i @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
           npx cap init "Rush711 Picture Color" com.rush711.picturecolor --web-dir www
           npx cap add android
+      - name: Mettre le logo Rush711
+        run: |
+          pip install pillow
+          python3 - <<'PY'
+          from PIL import Image, ImageFilter
+          import os
+          src = Image.open("icon-512.png").convert("RGB")
+          res = "android/app/src/main/res"
+          dens = {"mdpi": (48, 108), "hdpi": (72, 162), "xhdpi": (96, 216), "xxhdpi": (144, 324), "xxxhdpi": (192, 432)}
+          def fg(n):
+              bg = src.resize((n, n), Image.LANCZOS).filter(ImageFilter.GaussianBlur(n / 28))
+              k = int(n * 0.62)
+              bg.paste(src.resize((k, k), Image.LANCZOS), ((n - k) // 2, (n - k) // 2))
+              return bg
+          for d, (leg, ad) in dens.items():
+              p = f"{res}/mipmap-{d}"
+              os.makedirs(p, exist_ok=True)
+              ic = src.resize((leg, leg), Image.LANCZOS)
+              ic.save(f"{p}/ic_launcher.png")
+              ic.save(f"{p}/ic_launcher_round.png")
+              fg(ad).save(f"{p}/r711_fg.png")
+          os.makedirs(f"{res}/mipmap-anydpi-v26", exist_ok=True)
+          xml = '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n<background android:drawable="@android:color/black"/>\n<foreground android:drawable="@mipmap/r711_fg"/>\n</adaptive-icon>\n'
+          for n in ("ic_launcher", "ic_launcher_round"):
+              open(f"{res}/mipmap-anydpi-v26/{n}.xml", "w").write(xml)
+          PY
           npx cap sync android
       - name: Compiler l'APK
         run: cd android && chmod +x gradlew && ./gradlew assembleDebug
@@ -30,3 +56,4 @@ jobs:
         with:
           name: Rush711-Picture-Color-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
