@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Rush711 Picture Color</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#18191c">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
 :root{--bg:#e4e3df;--panel:#f4f3f0;--ink:#1b1a18;--mute:#76736c;--line:#d2d0c9;--track:#cbc9c2;--acc:#b36b00;--accink:#fff;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e0e10;--panel:#18191c;--ink:#e9e8e4;--mute:#8a8882;--line:#26272b;--track:#34353a;--acc:#f2a93b;--accink:#1a1204;color-scheme:dark}}
@@ -72,6 +78,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
 #ov .b{display:flex;gap:8px;width:100%;max-width:420px}
 #ov .b button{flex:1;padding:13px;border-radius:8px;border:1px solid #555;color:#fff}
 #ov .b .ok{background:var(--acc);border-color:var(--acc);color:var(--accink);font-weight:600}
+#ov .b button[aria-pressed="true"]{border-color:var(--acc);color:var(--acc)}
+#ov button:disabled{opacity:.4}
 #toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 64px);transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 14px;border-radius:8px;font-size:14px;display:none;z-index:6;max-width:90%}
 </style>
 </head>
@@ -98,6 +106,8 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
 <input type="file" id="ref" accept="image/*" hidden>
 <div id="ov">
   <img id="oimg" alt="Photo retouchée">
+  <p id="oinfo"></p>
+  <div class="b"><button id="fj" aria-pressed="true">JPEG qualité max</button><button id="fp" aria-pressed="false">PNG sans perte</button></div>
   <p>Appuie longuement sur l’image pour l’enregistrer dans ta galerie.</p>
   <div class="b"><button class="ok" id="dl">Télécharger</button><button id="share">Partager</button><button id="close">Fermer</button></div>
 </div>
@@ -197,7 +207,7 @@ function load(f){
   var mx=Math.min(3000,gl.getParameter(gl.MAX_TEXTURE_SIZE)),k=Math.min(1,mx/Math.max(bmp.width,bmp.height));
   var w=Math.round(bmp.width*k),h=Math.round(bmp.height*k),o=document.createElement("canvas");
   o.width=w;o.height=h;o.getContext("2d").drawImage(bmp,0,0,w,h);
-  src={w:w,h:h};SM=samp(o);C={x:0,y:0,w:1,h:1};crop=false;view={z:1,x:0,y:0};has=true;
+  src={w:w,h:h};srcFile=f;SM=samp(o);C={x:0,y:0,w:1,h:1};crop=false;view={z:1,x:0,y:0};has=true;
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,o);
   frame.style.display="block";$("empty").style.display="none";
@@ -465,27 +475,149 @@ var cmp=$("cmp");
 cmp.addEventListener("pointerdown",function(e){e.preventDefault();showOrig=true;draw()});
 ["pointerup","pointercancel","pointerleave"].forEach(function(n){cmp.addEventListener(n,function(){if(showOrig){showOrig=false;draw()}})});
 cmp.addEventListener("contextmenu",function(e){e.preventDefault()});
-$("exp").onclick=function(){
- if(!has)return;
- if(crop){toast("Termine le recadrage avant d’exporter.");return}
- showOrig=false;draw();
+/* Export en pleine résolution, sans redimensionnement */
+var srcFile=null,fmt="jpg",busy=false;
+function mkGL(c){
+ var g=c.getContext("webgl",{preserveDrawingBuffer:true});if(!g)return null;
+ var pr=g.createProgram();
+ [[g.VERTEX_SHADER,VS],[g.FRAGMENT_SHADER,FS]].forEach(function(a){var o=g.createShader(a[0]);g.shaderSource(o,a[1]);g.compileShader(o);g.attachShader(pr,o)});
+ g.linkProgram(pr);g.useProgram(pr);
+ g.bindBuffer(g.ARRAY_BUFFER,g.createBuffer());g.bufferData(g.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),g.STATIC_DRAW);
+ var pl=g.getAttribLocation(pr,"p");g.enableVertexAttribArray(pl);g.vertexAttribPointer(pl,2,g.FLOAT,false,0,0);
+ var u={};["K","e","c","h","s","t","g","vb","a"].forEach(function(n){u[n]=g.getUniformLocation(pr,n)});
+ g.bindTexture(g.TEXTURE_2D,g.createTexture());
+ g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MIN_FILTER,g.NEAREST);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MAG_FILTER,g.NEAREST);
+ g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_S,g.CLAMP_TO_EDGE);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_T,g.CLAMP_TO_EDGE);
+ return{g:g,u:u};
+}
+function exifOf(buf){
+ try{
+  var v=new DataView(buf);if(v.getUint16(0)!==0xFFD8)return null;
+  var o=2;
+  while(o+4<v.byteLength){
+   var m=v.getUint16(o);if(m===0xFFDA||m<0xFF00)break;
+   var l=v.getUint16(o+2);
+   if(m===0xFFE1&&v.getUint32(o+4)===0x45786966){
+    var seg=new Uint8Array(buf.slice(o,o+2+l)),d=new DataView(seg.buffer),le=d.getUint16(10)===0x4949;
+    var ifd=10+d.getUint32(14,le),n=d.getUint16(ifd,le);
+    for(var i=0;i<n;i++){var e=ifd+2+i*12;if(d.getUint16(e,le)===0x0112){d.setUint16(e+8,1,le);break}}
+    return seg;
+   }
+   o+=2+l;
+  }
+ }catch(x){}
+ return null;
+}
+function untouched(){
+ return KEYS.every(function(k){return P[k]===0})&&C.x===0&&C.y===0&&C.w===1&&C.h===1;
+}
+function toBlob(c,type,q){return new Promise(function(res){c.toBlob(res,type,q)})}
+function exportFull(f){
+ var isJpg=srcFile&&(srcFile.type==="image/jpeg"||/\.jpe?g$/i.test(srcFile.name||""));
+ return createImageBitmap(srcFile,{imageOrientation:"from-image"}).then(function(bmp){
+  var FW=bmp.width,FH=bmp.height;
+  if(untouched()&&f==="jpg"&&isJpg){bmp.close&&bmp.close();return{blob:srcFile,w:FW,h:FH,note:"original inchangé"}}
+  var sx=Math.round(C.x*FW),sy=Math.round(C.y*FH),w=Math.max(1,Math.min(FW-sx,Math.round(C.w*FW))),h=Math.max(1,Math.min(FH-sy,Math.round(C.h*FH)));
+  var out=document.createElement("canvas");out.width=w;out.height=h;
+  var oc=out.getContext("2d"),ec=document.createElement("canvas"),E=mkGL(ec);
+  if(!E)throw new Error("webgl");
+  var g=E.g,u=E.u,T=Math.min(2048,g.getParameter(g.MAX_TEXTURE_SIZE)),tc=document.createElement("canvas"),tx2=tc.getContext("2d");
+  var tiles=[],x,y;
+  for(y=0;y<h;y+=T)for(x=0;x<w;x+=T)tiles.push([x,y]);
+  var i=0;
+  function step(){
+   if(i>=tiles.length)return Promise.resolve();
+   var tx=tiles[i][0],ty=tiles[i][1],tw=Math.min(T,w-tx),th=Math.min(T,h-ty);
+   tc.width=tw;tc.height=th;tx2.drawImage(bmp,sx+tx,sy+ty,tw,th,0,0,tw,th);
+   ec.width=tw;ec.height=th;g.viewport(0,0,tw,th);
+   g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,true);
+   g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,tc);
+   g.uniform4f(u.K,0,0,1,1);
+   g.uniform1f(u.e,P.e);g.uniform1f(u.c,P.c);g.uniform1f(u.h,P.h);g.uniform1f(u.s,P.s);
+   g.uniform1f(u.t,P.t);g.uniform1f(u.g,P.g);g.uniform1f(u.vb,P.v);g.uniform1f(u.a,P.a);
+   g.drawArrays(g.TRIANGLE_STRIP,0,4);
+   oc.drawImage(ec,tx,ty);
+   i++;$("oinfo").textContent="Traitement en pleine résolution… "+Math.round(i/tiles.length*100)+" %";
+   return new Promise(function(r){setTimeout(r,0)}).then(step);
+  }
+  return step().then(function(){
+   bmp.close&&bmp.close();tc.width=tc.height=1;ec.width=ec.height=1;
+   var ext=g.getExtension("WEBGL_lose_context");if(ext)ext.loseContext();
+   return toBlob(out,f==="png"?"image/png":"image/jpeg",1);
+  }).then(function(blob){
+   out.width=out.height=1;
+   if(!blob)throw new Error("encode");
+   if(f==="png")return{blob:blob,w:w,h:h,note:"sans métadonnées"};
+   if(!isJpg)return{blob:blob,w:w,h:h,note:""};
+   return srcFile.slice(0,262144).arrayBuffer().then(function(hd){
+    var seg=exifOf(hd);if(!seg)return{blob:blob,w:w,h:h,note:""};
+    return blob.arrayBuffer().then(function(rest){
+     return{blob:new Blob([new Uint8Array([0xFF,0xD8]),seg,new Uint8Array(rest,2)],{type:"image/jpeg"}),w:w,h:h,note:"EXIF conservé"};
+    });
+   });
+  });
+ });
+}
+function setBusy(b,msg){
+ if(msg!==undefined)$("oinfo").textContent=msg;
+ ["dl","share","fj","fp"].forEach(function(i){$(i).disabled=b});
+}
+function showResult(b,info){
+ lastBlob=b;if(blobUrl)URL.revokeObjectURL(blobUrl);
+ blobUrl=URL.createObjectURL(b);$("oimg").src=blobUrl;
+ setBusy(false,info+" · "+(b.size/1048576).toFixed(1).replace(".",",")+" Mo");
+}
+function fallbackExport(){
+ showOrig=false;raf=0;draw();
  requestAnimationFrame(function(){requestAnimationFrame(function(){
   cv.toBlob(function(b){
-   if(!b){toast("L’export a échoué.");return}
-   lastBlob=b;if(blobUrl)URL.revokeObjectURL(blobUrl);
-   blobUrl=URL.createObjectURL(b);$("oimg").src=blobUrl;$("ov").style.display="flex";
-  },"image/jpeg",0.92);
+   busy=false;
+   if(!b){setBusy(false,"L’export a échoué.");return}
+   showResult(b,cv.width+" × "+cv.height+" px (taille réduite)");
+  },"image/jpeg",0.95);
  })});
-};
+}
+function runExport(){
+ if(!has||busy)return;
+ if(crop){toast("Termine le recadrage avant d’exporter.");return}
+ busy=true;$("fj").setAttribute("aria-pressed",fmt==="jpg");$("fp").setAttribute("aria-pressed",fmt==="png");
+ $("ov").style.display="flex";$("oimg").removeAttribute("src");setBusy(true,"Traitement en pleine résolution…");
+ exportFull(fmt).then(function(r){
+  busy=false;showResult(r.blob,r.w+" × "+r.h+" px"+(r.note?" · "+r.note:""));
+ }).catch(function(){
+  toast("Mémoire insuffisante : export en taille réduite.");fallbackExport();
+ });
+}
+function setFmt(f){fmt=f;runExport()}
+$("fj").onclick=function(){setFmt("jpg")};
+$("fp").onclick=function(){setFmt("png")};
+$("exp").onclick=runExport;
 $("close").onclick=function(){$("ov").style.display="none"};
+function nat(){
+ var C=window.Capacitor;if(!(C&&C.isNativePlatform&&C.isNativePlatform()))return null;
+ var P=C.Plugins||{};
+ return{FS:P.Filesystem||C.registerPlugin("Filesystem"),SH:P.Share||C.registerPlugin("Share")};
+}
+function nativeSave(){
+ var N=nat();if(!N||!lastBlob)return false;
+ var fr=new FileReader();
+ fr.onload=function(){
+  var b64=String(fr.result).split(",")[1];
+  N.FS.writeFile({path:"rush711-picture-color-"+Date.now()+(fmt==="png"?".png":".jpg"),data:b64,directory:"CACHE"})
+   .then(function(r){return N.SH.share({title:"Rush711 Picture Color",files:[r.uri]})})
+   .catch(function(e){toast("Partage impossible : "+((e&&e.message)||"erreur"))});
+ };
+ fr.readAsDataURL(lastBlob);return true;
+}
 $("dl").onclick=function(){
- if(!lastBlob||!blobUrl)return;
- var a=document.createElement("a");a.href=blobUrl;a.download="rush711-picture-color.jpg";
+ if(!lastBlob||!blobUrl)return;if(nativeSave())return;
+ var a=document.createElement("a");a.href=blobUrl;a.download="rush711-picture-color"+(fmt==="png"?".png":".jpg");
  document.body.appendChild(a);a.click();a.remove();toast("Téléchargement lancé.");
 };
 $("share").onclick=function(){
+ if(nativeSave())return;
  try{
-  var f=new File([lastBlob],"rush711-picture-color.jpg",{type:"image/jpeg"});
+  var f=new File([lastBlob],"rush711-picture-color"+(fmt==="png"?".png":".jpg"),{type:fmt==="png"?"image/png":"image/jpeg"});
   if(navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f]}).catch(function(){});return}
  }catch(e){}
  toast("Partage indisponible ici. Appuie longuement sur l’image.");
@@ -493,5 +625,6 @@ $("share").onclick=function(){
 buildTabs();buildPanel();
 })();
 </script>
+<script>if("serviceWorker"in navigator){window.addEventListener("load",function(){navigator.serviceWorker.register("sw.js").catch(function(){})})}</script>
 </body>
 </html>
